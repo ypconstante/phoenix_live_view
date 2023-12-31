@@ -273,19 +273,25 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
     {:noreply, state}
   end
 
-  def handle_info({:sync_render_element, operation, topic_or_element, from}, state) do
+  def handle_info({:sync_render_element, :find_element, topic_or_element, from}, state) do
     view = fetch_view_by_topic!(state, proxy_topic(topic_or_element))
     result = state |> root(view) |> select_node(topic_or_element)
 
     reply =
-      case {operation, result} do
-        {:find_element, {:ok, node}} -> {:ok, node}
-        {:find_element, {:error, _, message}} -> {:raise, ArgumentError.exception(message)}
-        {:has_element?, {:error, :none, _}} -> {:ok, false}
-        {:has_element?, _} -> {:ok, true}
+      case result do
+        {:ok, node} -> {:ok, node}
+        {:error, _, message} -> {:raise, ArgumentError.exception(message)}
       end
 
     GenServer.reply(from, reply)
+    {:noreply, state}
+  end
+
+  def handle_info({:sync_render_element, :has_element?, topic_or_element, from}, state) do
+    view = fetch_view_by_topic!(state, proxy_topic(topic_or_element))
+    result = state |> root(view) |> has_element?(topic_or_element)
+
+    GenServer.reply(from, {:ok, result})
     {:noreply, state}
   end
 
@@ -937,6 +943,20 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
     else
       {:ok, root}
     end
+  end
+
+  defp has_element?(root, %Element{selector: selector, text_filter: nil}) do
+    root
+    |> DOM.child_nodes()
+    |> DOM.all(selector)
+    |> Enum.any?()
+  end
+
+  defp has_element?(root, %Element{selector: selector, text_filter: text_filter}) do
+    root
+    |> DOM.child_nodes()
+    |> DOM.all(selector)
+    |> Enum.any?(&(DOM.to_text(&1) =~ text_filter))
   end
 
   defp maybe_event(:upload_progress, node, %Element{} = element) do
