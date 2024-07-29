@@ -607,27 +607,51 @@ defmodule Phoenix.LiveView.Engine do
   end
 
   defp changed_assigns(assigns) do
-    checks =
-      for {key, _} <- assigns, not nested_and_parent_is_checked?(key, assigns) do
-        case key do
-          [assign] ->
-            quote do
-              unquote(__MODULE__).changed_assign?(changed, unquote(assign))
-            end
+    {simple_assigns, nested_assigns} =
+      assigns
+      |> Enum.map(fn {key, _} -> key end)
+      |> Enum.reject(fn key -> nested_and_parent_is_checked?(key, assigns) end)
+      |> Enum.split_with(fn key -> length(key) == 1 end)
 
-          [assign | tail] ->
-            quote do
-              unquote(__MODULE__).nested_changed_assign?(
-                unquote(tail),
-                unquote(assign),
-                unquote(@assigns_var),
-                changed
-              )
-            end
+    simple_clauses =
+      Enum.flat_map(
+        simple_assigns,
+        fn [key] ->
+          quote do: (%{unquote(key) => _} -> true)
         end
+      )
+
+    nested_checks =
+      if nested_assigns != [] do
+        nested_assigns
+        |> Enum.map(fn [assign | tail] ->
+          quote do
+            unquote(__MODULE__).nested_changed_assign?(
+              unquote(tail),
+              unquote(assign),
+              unquote(@assigns_var),
+              changed
+            ) == true
+          end
+        end)
+        |> Enum.reduce(&{:or, [], [&1, &2]})
+      else
+        false
       end
 
-    Enum.reduce(checks, &{:or, [], [&1, &2]})
+    fallback_clauses =
+      quote do
+        nil -> true
+        %{} -> unquote(nested_checks)
+      end
+
+    quote do
+      case changed do
+        [
+          unquote_splicing(simple_clauses ++ fallback_clauses)
+        ]
+      end
+    end
   end
 
   defguardp is_access(mod)
